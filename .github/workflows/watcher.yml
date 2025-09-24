@@ -89,18 +89,26 @@ jobs:
             -d parse_mode="Markdown" \
             -d text="Watcher started for \`${{ env.POSTER_REPO }}\` on \`${{ env.POSTER_BRANCH }}\`. Running ~4h loop."
 
-      - name: Watch loop (4 hours total)
+      -       - name: Watch loop (4 hours total)
         shell: bash
+        working-directory: poster
+        env:
+          FACEBOOK_PAGE_TOKEN: ${{ env.FACEBOOK_PAGE_TOKEN }}
+          FACEBOOK_PAGE_ID: ${{ env.FACEBOOK_PAGE_ID }}
+          TELEGRAM_BOT_TOKEN: ${{ env.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHANNEL_ID: ${{ env.TELEGRAM_CHANNEL_ID }}
+          TG_NOTIFY_TOKEN: ${{ env.TG_NOTIFY_TOKEN }}
+          TG_NOTIFY_CHAT: ${{ env.TG_NOTIFY_CHAT }}
         run: |
           set -e
           iters=120
           for i in $(seq 1 $iters); do
             echo "[$i/$iters] Pulling latest poster repo..."
-            git -C poster pull --ff-only || true
+            git pull --ff-only || true
 
             echo "Running watcher-only..."
-            python poster/github_action_poster.py --config poster/config.yaml --watcher-only || code=$?
-            code=${code:-0}
+            python github_action_poster.py --config config.yaml --watcher-only
+            code=$?
             if [ $code -ne 0 ] && [ -n "$TG_NOTIFY_TOKEN" ] && [ -n "$TG_NOTIFY_CHAT" ]; then
               curl -s -X POST \
                 "https://api.telegram.org/bot${TG_NOTIFY_TOKEN}/sendMessage" \
@@ -109,11 +117,11 @@ jobs:
                 -d text="Watcher error on iteration *$i* (exit $code) for \`${{ env.POSTER_REPO }}\`."
             fi
 
-            echo "Committing bot_state.json if changed..."
-            git -C poster add bot_state.json || true
-            if ! git -C poster diff --staged --quiet; then
-              git -C poster commit -m "watcher: update bot state [skip ci]" || true
-              git -C poster push origin HEAD:${{ env.POSTER_BRANCH }} || true
+            echo "Committing state if changed (root or data/)..."
+            git add bot_state.json data/bot_state.json || true
+            if ! git diff --staged --quiet; then
+              git commit -m "watcher: update bot state [skip ci]" || true
+              git push origin HEAD:${{ env.POSTER_BRANCH }} || true
             fi
 
             echo "Sleeping 120s..."
@@ -141,3 +149,4 @@ jobs:
             -H "Accept: application/vnd.github+json" \
             "https://api.github.com/repos/${{ github.repository }}/actions/workflows/watcher.yml/dispatches" \
             -d '{"ref":"'"${{ github.ref_name }}"'"}'
+
