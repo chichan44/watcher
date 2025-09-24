@@ -1,7 +1,6 @@
 name: Frame Comment Watcher
 
 on:
-  # Start manually once from the Actions tab; it will self-restart indefinitely
   workflow_dispatch: {}
 
 concurrency:
@@ -9,8 +8,8 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: write     # push bot_state.json back to poster repo
-  actions: write      # self-dispatch to restart after 4h+2m
+  contents: write
+  actions: write
 
 env:
   POSTER_REPO: chichan44/framebot
@@ -20,6 +19,16 @@ env:
 jobs:
   run-watcher:
     runs-on: ubuntu-latest
+
+    # Map secrets to env once here; then use env.* everywhere (including if:)
+    env:
+      FACEBOOK_PAGE_TOKEN: ${{ secrets.FACEBOOK_PAGE_TOKEN }}
+      FACEBOOK_PAGE_ID: ${{ secrets.FACEBOOK_PAGE_ID }}
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHANNEL_ID: ${{ secrets.TELEGRAM_CHANNEL_ID }}
+      TG_NOTIFY_TOKEN: ${{ secrets.TELEGRAM_NOTIFY_BOT_TOKEN }}
+      TG_NOTIFY_CHAT: ${{ secrets.TELEGRAM_NOTIFY_CHAT_ID }}
+
     steps:
       - name: Checkout poster repo
         uses: actions/checkout@v4
@@ -56,65 +65,48 @@ jobs:
           p = 'poster/config.yaml'
           with open(p,'r',encoding='utf-8') as f:
               c = yaml.safe_load(f)
-          # Inject platform tokens from secrets (used by poster code)
           c['platforms']['facebook']['page_access_token'] = os.environ['FACEBOOK_PAGE_TOKEN']
           c['platforms']['facebook']['page_id'] = os.environ['FACEBOOK_PAGE_ID']
           c['platforms']['telegram']['bot_token'] = os.environ['TELEGRAM_BOT_TOKEN']
           c['platforms']['telegram']['channel_id'] = os.environ['TELEGRAM_CHANNEL_ID']
-          # Ensure comment watcher is enabled if present in config
           if 'comments' in c and isinstance(c['comments'], dict):
               c['comments']['watcher_enabled'] = True
           with open(p,'w',encoding='utf-8') as f:
               yaml.safe_dump(c, f, sort_keys=False)
           PY
-        env:
-          FACEBOOK_PAGE_TOKEN: ${{ secrets.FACEBOOK_PAGE_TOKEN }}
-          FACEBOOK_PAGE_ID: ${{ secrets.FACEBOOK_PAGE_ID }}
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHANNEL_ID: ${{ secrets.TELEGRAM_CHANNEL_ID }}
 
-      - name: Configure Git identity (for pushing state)
+      - name: Configure Git identity
         run: |
           git config --global user.name "watcher-bot"
           git config --global user.email "watcher@users.noreply.github.com"
 
       - name: Notify start (Telegram, optional)
-        if: ${{ secrets.TELEGRAM_NOTIFY_BOT_TOKEN != '' && secrets.TELEGRAM_NOTIFY_CHAT_ID != '' }}
+        if: ${{ env.TG_NOTIFY_TOKEN != '' && env.TG_NOTIFY_CHAT != '' }}
         run: |
           curl -s -X POST \
-            "https://api.telegram.org/bot${{ secrets.TELEGRAM_NOTIFY_BOT_TOKEN }}/sendMessage" \
-            -d chat_id="${{ secrets.TELEGRAM_NOTIFY_CHAT_ID }}" \
+            "https://api.telegram.org/bot${TG_NOTIFY_TOKEN}/sendMessage" \
+            -d chat_id="${TG_NOTIFY_CHAT}" \
             -d parse_mode="Markdown" \
-            -d text="Watcher started for \`${{ env.POSTER_REPO }}\` on branch \`${{ env.POSTER_BRANCH }}\`. Running ~4h loop."
+            -d text="Watcher started for \`${{ env.POSTER_REPO }}\` on \`${{ env.POSTER_BRANCH }}\`. Running ~4h loop."
 
       - name: Watch loop (4 hours total)
         shell: bash
-        env:
-          FACEBOOK_PAGE_TOKEN: ${{ secrets.FACEBOOK_PAGE_TOKEN }}
-          FACEBOOK_PAGE_ID: ${{ secrets.FACEBOOK_PAGE_ID }}
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHANNEL_ID: ${{ secrets.TELEGRAM_CHANNEL_ID }}
-          TG_NOTIFY_TOKEN: ${{ secrets.TELEGRAM_NOTIFY_BOT_TOKEN }}
-          TG_NOTIFY_CHAT: ${{ secrets.TELEGRAM_NOTIFY_CHAT_ID }}
         run: |
           set -e
-          iters=120   # 120 * 120s = ~4 hours
+          iters=120
           for i in $(seq 1 $iters); do
             echo "[$i/$iters] Pulling latest poster repo..."
             git -C poster pull --ff-only || true
 
             echo "Running watcher-only..."
-            python poster/github_action_poster.py --config poster/config.yaml --watcher-only
-            code=$?
-            if [ $code -ne 0 ]; then
-              echo "watcher-only exited with code $code"
-              if [ -n "$TG_NOTIFY_TOKEN" ] && [ -n "$TG_NOTIFY_CHAT" ]; then
-                curl -s -X POST \
-                  "https://api.telegram.org/bot${TG_NOTIFY_TOKEN}/sendMessage" \
-                  -d chat_id="${TG_NOTIFY_CHAT}" \
-                  -d parse_mode="Markdown" \
-                  -d text="Watcher error on iteration *$i* (exit $code) for \`${{ env.POSTER_REPO }}\`."
-              fi
+            python poster/github_action_poster.py --config poster/config.yaml --watcher-only || code=$?
+            code=${code:-0}
+            if [ $code -ne 0 ] && [ -n "$TG_NOTIFY_TOKEN" ] && [ -n "$TG_NOTIFY_CHAT" ]; then
+              curl -s -X POST \
+                "https://api.telegram.org/bot${TG_NOTIFY_TOKEN}/sendMessage" \
+                -d chat_id="${TG_NOTIFY_CHAT}" \
+                -d parse_mode="Markdown" \
+                -d text="Watcher error on iteration *$i* (exit $code) for \`${{ env.POSTER_REPO }}\`."
             fi
 
             echo "Committing bot_state.json if changed..."
@@ -129,11 +121,11 @@ jobs:
           done
 
       - name: Notify stop (Telegram, optional)
-        if: ${{ secrets.TELEGRAM_NOTIFY_BOT_TOKEN != '' && secrets.TELEGRAM_NOTIFY_CHAT_ID != '' }}
+        if: ${{ env.TG_NOTIFY_TOKEN != '' && env.TG_NOTIFY_CHAT != '' }}
         run: |
           curl -s -X POST \
-            "https://api.telegram.org/bot${{ secrets.TELEGRAM_NOTIFY_BOT_TOKEN }}/sendMessage" \
-            -d chat_id="${{ secrets.TELEGRAM_NOTIFY_CHAT_ID }}" \
+            "https://api.telegram.org/bot${TG_NOTIFY_TOKEN}/sendMessage" \
+            -d chat_id="${TG_NOTIFY_CHAT}" \
             -d parse_mode="Markdown" \
             -d text="Watcher finished 4h loop for \`${{ env.POSTER_REPO }}\`. Will restart in 2 minutes."
 
