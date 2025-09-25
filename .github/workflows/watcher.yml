@@ -101,9 +101,13 @@ jobs:
           TG_NOTIFY_CHAT: ${{ env.TG_NOTIFY_CHAT }}
         run: |
           set -e
-          iters=120
-          for i in $(seq 1 $iters); do
-            echo "[$i/$iters] Pulling latest poster repo..."
+          start_ts=$(date +%s)
+          end_ts=$(( start_ts + 4*60*60 ))
+          SLEEP_SECONDS=5
+          i=0
+          while [ "$(date +%s)" -lt "$end_ts" ]; do
+            i=$((i+1))
+            echo "[$i] Pulling latest poster repo..."
             git pull --ff-only || true
 
             echo "Running watcher-only..."
@@ -129,8 +133,7 @@ jobs:
               git push origin HEAD:${{ env.POSTER_BRANCH }} || (git pull --rebase || true; git push origin HEAD:${{ env.POSTER_BRANCH }} || true)
             fi
 
-            echo "Sleeping 120s..."
-            sleep 120
+            sleep "$SLEEP_SECONDS"
           done
 
       - name: Notify stop (Telegram, optional)
