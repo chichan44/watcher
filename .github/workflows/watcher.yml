@@ -60,20 +60,20 @@ jobs:
       - name: Prepare config.yaml
         run: |
           cp poster/config_template.yaml poster/config.yaml
-          python - <<'PY'
-          import yaml, os
-          p = 'poster/config.yaml'
-          with open(p,'r',encoding='utf-8') as f:
-              c = yaml.safe_load(f)
-          c['platforms']['facebook']['page_access_token'] = os.environ['FACEBOOK_PAGE_TOKEN']
-          c['platforms']['facebook']['page_id'] = os.environ['FACEBOOK_PAGE_ID']
-          c['platforms']['telegram']['bot_token'] = os.environ['TELEGRAM_BOT_TOKEN']
-          c['platforms']['telegram']['channel_id'] = os.environ['TELEGRAM_CHANNEL_ID']
-          if 'comments' in c and isinstance(c['comments'], dict):
-              c['comments']['watcher_enabled'] = True
-          with open(p,'w',encoding='utf-8') as f:
-              yaml.safe_dump(c, f, sort_keys=False)
-          PY
+          python -c '
+import yaml, os
+p = "poster/config.yaml"
+with open(p, "r", encoding="utf-8") as f:
+    c = yaml.safe_load(f)
+c["platforms"]["facebook"]["page_access_token"] = os.environ["FACEBOOK_PAGE_TOKEN"]
+c["platforms"]["facebook"]["page_id"] = os.environ["FACEBOOK_PAGE_ID"]
+c["platforms"]["telegram"]["bot_token"] = os.environ["TELEGRAM_BOT_TOKEN"]
+c["platforms"]["telegram"]["channel_id"] = os.environ["TELEGRAM_CHANNEL_ID"]
+if "comments" in c and isinstance(c["comments"], dict):
+    c["comments"]["watcher_enabled"] = True
+with open(p, "w", encoding="utf-8") as f:
+    yaml.safe_dump(c, f, sort_keys=False)
+'
 
       - name: Configure Git identity
         run: |
@@ -131,58 +131,43 @@ jobs:
 
             MEANINGFUL=0
             if [ -n "$STATE" ]; then
-              OUT=$(python - "$STATE" <<'PY'
-              import json, sys, subprocess
-              path = sys.argv[1]
+              OUT=$(python -c '
+import json, sys, subprocess
+p = sys.argv[1]
 
-              def load_head(p):
-                  try:
-                      data = subprocess.check_output(["git", "show", f"HEAD:{p}"])
-                      return json.loads(data.decode("utf-8", errors="ignore"))
-                  except Exception:
-                      return None
+def load_head(path):
+    try:
+        data = subprocess.check_output(["git", "show", f"HEAD:{path}"], stderr=subprocess.DEVNULL)
+        return json.loads(data.decode("utf-8", errors="ignore"))
+    except Exception:
+        return None
+def load_working(path):
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
 
-              def load_working(p):
-                  try:
-                      with open(p, "r", encoding="utf-8") as f:
-                          return json.load(f)
-                  except Exception:
-                      return None
+def posted_keys(state):
+    if not isinstance(state, dict):
+        return set()
+    res = set()
+    for x in (state.get("scheduled_posts") or []):
+        if isinstance(x, dict) and x.get("comments_posted"):
+            ident = x.get("id")
+            if ident is None:
+                ident = str(x.get("schedule_epoch")) + "-" + str(x.get("post_id"))
+            res.add(str(ident))
+    return res
 
-              def posted_keys(state):
-                  if not isinstance(state, dict):
-                      return set()
-                  posts = state.get("scheduled_posts") or []
-                  keys = set()
-                  for p in posts:
-                      if not isinstance(p, dict):
-                          continue
-                      if not p.get("comments_posted"):
-                          continue
-                      # Build a stable identity for the post
-                      ident = p.get("id")
-                      if not ident:
-                          ident = p.get("post_id")
-                      if not ident:
-                          ident = f"{p.get('schedule_epoch')}-{p.get('post_id')}"
-                      keys.add(str(ident))
-                  return keys
+head = load_head(p)
+work = load_working(p)
 
-              head = load_head(path)
-              working = load_working(path)
+if head is None and work is not None:
+    print("MEANINGFUL=1"); sys.exit(0)
 
-              # If there's no committed state yet, treat as meaningful to ensure state is created
-              if head is None and working is not None:
-                  print("MEANINGFUL=1")
-                  sys.exit(0)
-
-              head_set = posted_keys(head)
-              working_set = posted_keys(working)
-
-              # Only meaningful if working has new posted items compared to head
-              print("MEANINGFUL=1" if (working_set - head_set) else "MEANINGFUL=0")
-              PY
-              )
+print("MEANINGFUL=1" if (posted_keys(work) - posted_keys(head)) else "MEANINGFUL=0")
+' "$STATE")
               echo "$OUT"
               MEANINGFUL=$(echo "$OUT" | grep -o 'MEANINGFUL=[01]' | tail -n1 | cut -d= -f2)
               if [ "$MEANINGFUL" = "1" ]; then
@@ -208,34 +193,28 @@ jobs:
               STATE_FILE="data/bot_state.json"
             fi
             if [ -n "$STATE_FILE" ]; then
-              NEXT_SLEEP=$(python - "$STATE_FILE" "$SLEEP_SECONDS" <<'PY'
-              import json, sys, time
-              path = sys.argv[1]
-              default_sleep = int(sys.argv[2])
-              now = int(time.time())
-              try:
-                  with open(path, 'r', encoding='utf-8') as f:
-                      state = json.load(f)
-                  posts = state.get('scheduled_posts') or []
-                  upcoming = [int(p.get('schedule_epoch', 0)) for p in posts if not p.get('comments_posted')]
-                  upcoming = [t for t in upcoming if t > 0]
-                  if upcoming:
-                      sched = min(upcoming)
-                      # Small buffer to ensure post is live before commenting
-                      target = sched + 5
-                      dt = target - now
-                      if dt <= 1:
-                          print(1)
-                      elif dt < default_sleep:
-                          print(dt)
-                      else:
-                          print(default_sleep)
-                  else:
-                      print(default_sleep)
-              except Exception:
-                  print(default_sleep)
-              PY
-              )
+              NEXT_SLEEP=$(python -c '
+import json, sys, time
+path = sys.argv[1]
+default_sleep = int(sys.argv[2])
+now = int(time.time())
+try:
+    with open(path, "r", encoding="utf-8") as f:
+        state = json.load(f)
+    posts = state.get("scheduled_posts") or []
+    upcoming = [int(p.get("schedule_epoch", 0)) for p in posts if not p.get("comments_posted")]
+    upcoming = [t for t in upcoming if t > 0]
+    if upcoming:
+        sched = min(upcoming)
+        # Small buffer to ensure post is live before commenting
+        target = sched + 5
+        dt = target - now
+        print(1 if dt <= 1 else (dt if dt < default_sleep else default_sleep))
+    else:
+        print(default_sleep)
+except Exception:
+    print(default_sleep)
+' "$STATE_FILE" "$SLEEP_SECONDS")
             fi
             echo "Sleeping ${NEXT_SLEEP}s..."
             sleep "$NEXT_SLEEP"
