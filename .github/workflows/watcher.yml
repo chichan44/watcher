@@ -121,26 +121,74 @@ jobs:
                 -d text="Watcher error on iteration *$i* (exit $code) for \`${{ env.POSTER_REPO }}\`."
             fi
 
-            echo "Committing state only if comments were posted..."
+            echo "Committing state only on meaningful changes (comments posted)..."
             # Rebase to reduce non-fast-forward conflicts with hourly poster workflow
             git pull --rebase || true
-            # Decide which state file to consider
+            # Pick state file
             STATE=""
-            if [ -f bot_state.json ]; then
-              STATE="bot_state.json"
-            elif [ -f data/bot_state.json ]; then
-              STATE="data/bot_state.json"
-            fi
+            if [ -f bot_state.json ]; then STATE="bot_state.json"; fi
+            if [ -z "$STATE" ] && [ -f data/bot_state.json ]; then STATE="data/bot_state.json"; fi
 
+            MEANINGFUL=0
             if [ -n "$STATE" ]; then
-              DIFF=$(git diff -- "$STATE" | sed '/^[^+-]/d' || true)
-              # Consider it meaningful only if comments were posted (comments_posted/ commented_at changed)
-              if echo "$DIFF" | grep -E '^[+-].*\"comments_posted\"\s*:\s*true' >/dev/null 2>&1 || \
-                 echo "$DIFF" | grep -E '^[+-].*\"commented_at\"' >/dev/null 2>&1; then
+              OUT=$(python - "$STATE" <<'PY'
+import json, sys, subprocess
+path = sys.argv[1]
+
+def load_head(p):
+    try:
+        data = subprocess.check_output(["git", "show", f"HEAD:{p}"])
+        return json.loads(data.decode("utf-8", errors="ignore"))
+    except Exception:
+        return None
+
+def load_working(p):
+    try:
+        with open(p, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+def posted_keys(state):
+    if not isinstance(state, dict):
+        return set()
+    posts = state.get("scheduled_posts") or []
+    keys = set()
+    for p in posts:
+        if not isinstance(p, dict):
+            continue
+        if not p.get("comments_posted"):
+            continue
+        # Build a stable identity for the post
+        ident = p.get("id")
+        if not ident:
+            ident = p.get("post_id")
+        if not ident:
+            ident = f"{p.get('schedule_epoch')}-{p.get('post_id')}"
+        keys.add(str(ident))
+    return keys
+
+head = load_head(path)
+working = load_working(path)
+
+# If there's no committed state yet, treat as meaningful to ensure state is created
+if head is None and working is not None:
+    print("MEANINGFUL=1")
+    sys.exit(0)
+
+head_set = posted_keys(head)
+working_set = posted_keys(working)
+
+# Only meaningful if working has new posted items compared to head
+print("MEANINGFUL=1" if (working_set - head_set) else "MEANINGFUL=0")
+PY
+)
+              echo "$OUT"
+              MEANINGFUL=$(echo "$OUT" | grep -o 'MEANINGFUL=[01]' | tail -n1 | cut -d= -f2)
+              if [ "$MEANINGFUL" = "1" ]; then
                 git add "$STATE" || true
               else
-                echo "No comment activity detected in state; skipping commit"
-                # Revert last_update-only changes to keep working tree clean
+                echo "No meaningful changes (only timestamps/order). Skipping commit."
                 git checkout -- "$STATE" || true
               fi
             fi
