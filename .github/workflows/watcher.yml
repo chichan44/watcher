@@ -89,7 +89,7 @@ jobs:
             -d parse_mode="Markdown" \
             -d text="Watcher started for \`${{ env.POSTER_REPO }}\` on \`${{ env.POSTER_BRANCH }}\`. Running ~4h loop."
 
-      -       - name: Watch loop (4 hours total)
+      - name: Watch loop (4 hours total)
         shell: bash
         working-directory: poster
         env:
@@ -107,8 +107,8 @@ jobs:
             git pull --ff-only || true
 
             echo "Running watcher-only..."
-            python github_action_poster.py --config config.yaml --watcher-only
-            code=$?
+            python github_action_poster.py --config config.yaml --watcher-only || code=$?
+            code=${code:-0}
             if [ $code -ne 0 ] && [ -n "$TG_NOTIFY_TOKEN" ] && [ -n "$TG_NOTIFY_CHAT" ]; then
               curl -s -X POST \
                 "https://api.telegram.org/bot${TG_NOTIFY_TOKEN}/sendMessage" \
@@ -149,4 +149,3 @@ jobs:
             -H "Accept: application/vnd.github+json" \
             "https://api.github.com/repos/${{ github.repository }}/actions/workflows/watcher.yml/dispatches" \
             -d '{"ref":"'"${{ github.ref_name }}"'"}'
-
