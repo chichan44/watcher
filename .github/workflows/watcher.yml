@@ -103,7 +103,7 @@ jobs:
           set -e
           start_ts=$(date +%s)
           end_ts=$(( start_ts + 4*60*60 ))
-          SLEEP_SECONDS=5
+          SLEEP_SECONDS=60
           i=0
           while [ "$(date +%s)" -lt "$end_ts" ]; do
             i=$((i+1))
@@ -121,19 +121,76 @@ jobs:
                 -d text="Watcher error on iteration *$i* (exit $code) for \`${{ env.POSTER_REPO }}\`."
             fi
 
-            echo "Committing state if changed (root or data/)..."
+            echo "Committing state only if comments were posted..."
             # Rebase to reduce non-fast-forward conflicts with hourly poster workflow
             git pull --rebase || true
-            # Stage only files that exist to avoid pathspec fatal errors
-            test -f bot_state.json && git add bot_state.json || true
-            test -f data/bot_state.json && git add data/bot_state.json || true
+            # Decide which state file to consider
+            STATE=""
+            if [ -f bot_state.json ]; then
+              STATE="bot_state.json"
+            elif [ -f data/bot_state.json ]; then
+              STATE="data/bot_state.json"
+            fi
+
+            if [ -n "$STATE" ]; then
+              DIFF=$(git diff -- "$STATE" | sed '/^[^+-]/d' || true)
+              # Consider it meaningful only if comments were posted (comments_posted/ commented_at changed)
+              if echo "$DIFF" | grep -E '^[+-].*\"comments_posted\"\s*:\s*true' >/dev/null 2>&1 || \
+                 echo "$DIFF" | grep -E '^[+-].*\"commented_at\"' >/dev/null 2>&1; then
+                git add "$STATE" || true
+              else
+                echo "No comment activity detected in state; skipping commit"
+                # Revert last_update-only changes to keep working tree clean
+                git checkout -- "$STATE" || true
+              fi
+            fi
+
             if ! git diff --staged --quiet; then
               git commit -m "watcher: update bot state [skip ci]" || true
               # Push; on failure (race), rebase and retry once
               git push origin HEAD:${{ env.POSTER_BRANCH }} || (git pull --rebase || true; git push origin HEAD:${{ env.POSTER_BRANCH }} || true)
             fi
 
-            sleep "$SLEEP_SECONDS"
+            # Smart sleep: if next scheduled publish is soon, wake just-in-time
+            NEXT_SLEEP=$SLEEP_SECONDS
+            STATE_FILE=""
+            if [ -f bot_state.json ]; then
+              STATE_FILE="bot_state.json"
+            elif [ -f data/bot_state.json ]; then
+              STATE_FILE="data/bot_state.json"
+            fi
+            if [ -n "$STATE_FILE" ]; then
+              NEXT_SLEEP=$(python - "$STATE_FILE" "$SLEEP_SECONDS" <<'PY'
+import json, sys, time
+path = sys.argv[1]
+default_sleep = int(sys.argv[2])
+now = int(time.time())
+try:
+    with open(path, 'r', encoding='utf-8') as f:
+        state = json.load(f)
+    posts = state.get('scheduled_posts') or []
+    upcoming = [int(p.get('schedule_epoch', 0)) for p in posts if not p.get('comments_posted')]
+    upcoming = [t for t in upcoming if t > 0]
+    if upcoming:
+        sched = min(upcoming)
+        # Small buffer to ensure post is live before commenting
+        target = sched + 5
+        dt = target - now
+        if dt <= 1:
+            print(1)
+        elif dt < default_sleep:
+            print(dt)
+        else:
+            print(default_sleep)
+    else:
+        print(default_sleep)
+except Exception:
+    print(default_sleep)
+PY
+)
+            fi
+            echo "Sleeping ${NEXT_SLEEP}s..."
+            sleep "$NEXT_SLEEP"
           done
 
       - name: Notify stop (Telegram, optional)
