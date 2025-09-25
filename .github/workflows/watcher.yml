@@ -118,10 +118,15 @@ jobs:
             fi
 
             echo "Committing state if changed (root or data/)..."
-            git add bot_state.json data/bot_state.json || true
+            # Rebase to reduce non-fast-forward conflicts with hourly poster workflow
+            git pull --rebase || true
+            # Stage only files that exist to avoid pathspec fatal errors
+            test -f bot_state.json && git add bot_state.json || true
+            test -f data/bot_state.json && git add data/bot_state.json || true
             if ! git diff --staged --quiet; then
               git commit -m "watcher: update bot state [skip ci]" || true
-              git push origin HEAD:${{ env.POSTER_BRANCH }} || true
+              # Push; on failure (race), rebase and retry once
+              git push origin HEAD:${{ env.POSTER_BRANCH }} || (git pull --rebase || true; git push origin HEAD:${{ env.POSTER_BRANCH }} || true)
             fi
 
             echo "Sleeping 120s..."
