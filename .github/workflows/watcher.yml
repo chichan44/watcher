@@ -132,57 +132,57 @@ jobs:
             MEANINGFUL=0
             if [ -n "$STATE" ]; then
               OUT=$(python - "$STATE" <<'PY'
-import json, sys, subprocess
-path = sys.argv[1]
+              import json, sys, subprocess
+              path = sys.argv[1]
 
-def load_head(p):
-    try:
-        data = subprocess.check_output(["git", "show", f"HEAD:{p}"])
-        return json.loads(data.decode("utf-8", errors="ignore"))
-    except Exception:
-        return None
+              def load_head(p):
+                  try:
+                      data = subprocess.check_output(["git", "show", f"HEAD:{p}"])
+                      return json.loads(data.decode("utf-8", errors="ignore"))
+                  except Exception:
+                      return None
 
-def load_working(p):
-    try:
-        with open(p, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return None
+              def load_working(p):
+                  try:
+                      with open(p, "r", encoding="utf-8") as f:
+                          return json.load(f)
+                  except Exception:
+                      return None
 
-def posted_keys(state):
-    if not isinstance(state, dict):
-        return set()
-    posts = state.get("scheduled_posts") or []
-    keys = set()
-    for p in posts:
-        if not isinstance(p, dict):
-            continue
-        if not p.get("comments_posted"):
-            continue
-        # Build a stable identity for the post
-        ident = p.get("id")
-        if not ident:
-            ident = p.get("post_id")
-        if not ident:
-            ident = f"{p.get('schedule_epoch')}-{p.get('post_id')}"
-        keys.add(str(ident))
-    return keys
+              def posted_keys(state):
+                  if not isinstance(state, dict):
+                      return set()
+                  posts = state.get("scheduled_posts") or []
+                  keys = set()
+                  for p in posts:
+                      if not isinstance(p, dict):
+                          continue
+                      if not p.get("comments_posted"):
+                          continue
+                      # Build a stable identity for the post
+                      ident = p.get("id")
+                      if not ident:
+                          ident = p.get("post_id")
+                      if not ident:
+                          ident = f"{p.get('schedule_epoch')}-{p.get('post_id')}"
+                      keys.add(str(ident))
+                  return keys
 
-head = load_head(path)
-working = load_working(path)
+              head = load_head(path)
+              working = load_working(path)
 
-# If there's no committed state yet, treat as meaningful to ensure state is created
-if head is None and working is not None:
-    print("MEANINGFUL=1")
-    sys.exit(0)
+              # If there's no committed state yet, treat as meaningful to ensure state is created
+              if head is None and working is not None:
+                  print("MEANINGFUL=1")
+                  sys.exit(0)
 
-head_set = posted_keys(head)
-working_set = posted_keys(working)
+              head_set = posted_keys(head)
+              working_set = posted_keys(working)
 
-# Only meaningful if working has new posted items compared to head
-print("MEANINGFUL=1" if (working_set - head_set) else "MEANINGFUL=0")
-PY
-)
+              # Only meaningful if working has new posted items compared to head
+              print("MEANINGFUL=1" if (working_set - head_set) else "MEANINGFUL=0")
+              PY
+              )
               echo "$OUT"
               MEANINGFUL=$(echo "$OUT" | grep -o 'MEANINGFUL=[01]' | tail -n1 | cut -d= -f2)
               if [ "$MEANINGFUL" = "1" ]; then
@@ -209,33 +209,33 @@ PY
             fi
             if [ -n "$STATE_FILE" ]; then
               NEXT_SLEEP=$(python - "$STATE_FILE" "$SLEEP_SECONDS" <<'PY'
-import json, sys, time
-path = sys.argv[1]
-default_sleep = int(sys.argv[2])
-now = int(time.time())
-try:
-    with open(path, 'r', encoding='utf-8') as f:
-        state = json.load(f)
-    posts = state.get('scheduled_posts') or []
-    upcoming = [int(p.get('schedule_epoch', 0)) for p in posts if not p.get('comments_posted')]
-    upcoming = [t for t in upcoming if t > 0]
-    if upcoming:
-        sched = min(upcoming)
-        # Small buffer to ensure post is live before commenting
-        target = sched + 5
-        dt = target - now
-        if dt <= 1:
-            print(1)
-        elif dt < default_sleep:
-            print(dt)
-        else:
-            print(default_sleep)
-    else:
-        print(default_sleep)
-except Exception:
-    print(default_sleep)
-PY
-)
+              import json, sys, time
+              path = sys.argv[1]
+              default_sleep = int(sys.argv[2])
+              now = int(time.time())
+              try:
+                  with open(path, 'r', encoding='utf-8') as f:
+                      state = json.load(f)
+                  posts = state.get('scheduled_posts') or []
+                  upcoming = [int(p.get('schedule_epoch', 0)) for p in posts if not p.get('comments_posted')]
+                  upcoming = [t for t in upcoming if t > 0]
+                  if upcoming:
+                      sched = min(upcoming)
+                      # Small buffer to ensure post is live before commenting
+                      target = sched + 5
+                      dt = target - now
+                      if dt <= 1:
+                          print(1)
+                      elif dt < default_sleep:
+                          print(dt)
+                      else:
+                          print(default_sleep)
+                  else:
+                      print(default_sleep)
+              except Exception:
+                  print(default_sleep)
+              PY
+              )
             fi
             echo "Sleeping ${NEXT_SLEEP}s..."
             sleep "$NEXT_SLEEP"
