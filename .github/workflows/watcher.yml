@@ -98,62 +98,85 @@ jobs:
             git pull --ff-only || true
 
             echo "Pre-check for already-commented posts to avoid duplicates..."
-            python -c "import os,json,time,urllib.request,urllib.parse; from pathlib import Path; token=os.environ.get('FACEBOOK_PAGE_TOKEN') or ''; page_id=os.environ.get('FACEBOOK_PAGE_ID') or ''; spath=Path('bot_state.json'); spath=Path('data/bot_state.json') if not spath.exists() else spath; modified=False; state={};
+            python - <<'PY'
+import os, json, time, urllib.request, urllib.parse
+from pathlib import Path
+
+token = os.environ.get('FACEBOOK_PAGE_TOKEN') or ''
+page_id = os.environ.get('FACEBOOK_PAGE_ID') or ''
+
+spath = Path('bot_state.json')
+if not spath.exists():
+    spath = Path('data/bot_state.json')
+modified = False
+state = {}
 try:
-    state=json.load(open(spath,'r',encoding='utf-8'))
+    with open(spath, 'r', encoding='utf-8') as f:
+        state = json.load(f)
 except Exception:
-    state={}
-sp=list(state.get('scheduled_posts') or []); unique=[]; seen=set();
+    state = {}
+
+sp = list(state.get('scheduled_posts') or [])
+unique = []
+seen = set()
 for it in sp:
     try:
-        key=(str((it.get('platform') or '')).lower(), str(it.get('post_id') or ''))
+        key = (str((it.get('platform') or '')).lower(), str(it.get('post_id') or ''))
         if key in seen or not key[1]:
             continue
         seen.add(key)
         unique.append(it)
     except Exception:
         pass
-if len(unique)!=len(sp):
-    state['scheduled_posts']=unique; modified=True
-now=int(time.time());
+if len(unique) != len(sp):
+    state['scheduled_posts'] = unique
+    modified = True
+
+now = int(time.time())
 if state.get('scheduled_posts'):
     for it in state['scheduled_posts']:
         try:
             if it.get('comments_posted'):
                 continue
-            sched=int(it.get('schedule_epoch',0))
+            sched = int(it.get('schedule_epoch', 0))
             if now < sched + 5:
                 continue
-            if (it.get('platform') or '').lower() not in ('facebook','fb') or not token or not page_id:
+            if (it.get('platform') or '').lower() not in ('facebook', 'fb') or not token or not page_id:
                 continue
-            pid=str(it.get('post_id') or '')
+            pid = str(it.get('post_id') or '')
             if not pid:
                 continue
-            url='https://graph.facebook.com/v19.0/{}/comments?fields=from,message&limit=100&access_token={}'.format(urllib.parse.quote(pid), urllib.parse.quote(token))
+            url = f"https://graph.facebook.com/v19.0/{urllib.parse.quote(pid)}/comments?fields=from,message&limit=100&access_token={urllib.parse.quote(token)}"
             try:
                 with urllib.request.urlopen(url, timeout=30) as resp:
-                    data=json.loads(resp.read().decode('utf-8','ignore'))
+                    data = json.loads(resp.read().decode('utf-8','ignore'))
             except Exception:
-                data={}
-            comments=data.get('data') or []
-            found_no_sub=False; found_crop=False
+                data = {}
+            comments = data.get('data') or []
+            found_no_sub = False
+            found_crop = False
             for c in comments:
                 try:
-                    f=(c.get('from') or {})
-                    mid=str(f.get('id') or '')
-                    msg=(c.get('message') or '')
-                    if mid==str(page_id) and msg.startswith('No subtitle version:'):
-                        found_no_sub=True
-                    if mid==str(page_id) and msg.startswith('Random Crop.'):
-                        found_crop=True
+                    f = (c.get('from') or {})
+                    mid = str(f.get('id') or '')
+                    msg = (c.get('message') or '')
+                    if mid == str(page_id) and msg.startswith('No subtitle version:'):
+                        found_no_sub = True
+                    if mid == str(page_id) and msg.startswith('Random Crop.'):
+                        found_crop = True
                 except Exception:
                     pass
             if found_no_sub and found_crop:
-                it['comments_posted']=True; it['commented_at']=now; modified=True
+                it['comments_posted'] = True
+                it['commented_at'] = now
+                modified = True
         except Exception:
             pass
-if modified:
-    json.dump(state, open(spath,'w',encoding='utf-8'), indent=2)" || true
+
+if modified and spath.exists():
+    with open(spath, 'w', encoding='utf-8') as f:
+        json.dump(state, f, indent=2)
+PY
 
             echo "Running watcher-only..."
             python github_action_poster.py --config config.yaml --watcher-only || code=$?
