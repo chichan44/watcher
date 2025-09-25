@@ -68,6 +68,7 @@ jobs:
           git config --global user.email "watcher@users.noreply.github.com"
 
       - name: Notify start (Telegram, optional)
+      
         if: ${{ env.TG_NOTIFY_TOKEN != '' && env.TG_NOTIFY_CHAT != '' }}
         run: |
           curl -s -X POST \
